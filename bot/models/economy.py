@@ -9,7 +9,8 @@ class Wallet(Base):
     __tablename__ = "wallets"
     id = Column(Integer, primary_key=True, autoincrement=True)
     guild_id = Column(BigInteger, nullable=False)
-    discord_id = Column(BigInteger, nullable=False)
+    # Внешний ключ к users.discord_id
+    discord_id = Column(BigInteger, ForeignKey("users.discord_id", ondelete="CASCADE"), nullable=False)
     balance = Column(BigInteger, nullable=False, server_default="0")
     lifetime_earned = Column(BigInteger, nullable=False, server_default="0")
     lifetime_spent = Column(BigInteger, nullable=False, server_default="0")
@@ -27,7 +28,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     guild_id = Column(BigInteger, nullable=False)
-    actor_discord_id = Column(BigInteger, nullable=True)
+    actor_discord_id = Column(BigInteger, nullable=True)   # можно добавить ForeignKey, но не обязательно
     from_discord_id = Column(BigInteger, nullable=True)
     to_discord_id = Column(BigInteger, nullable=True)
     amount = Column(BigInteger, nullable=False)
@@ -36,6 +37,7 @@ class Transaction(Base):
     description = Column(String(300), nullable=False, server_default="")
     reference = Column(String(120), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Отношения (без ForeignKey, чтобы не создавать циклических зависимостей)
     from_user = relationship("User", foreign_keys=[from_discord_id])
     to_user = relationship("User", foreign_keys=[to_discord_id])
     actor_user = relationship("User", foreign_keys=[actor_discord_id])
@@ -65,12 +67,11 @@ class InventoryItem(Base):
     __tablename__ = "inventory_items"
     id = Column(Integer, primary_key=True, autoincrement=True)
     guild_id = Column(BigInteger, nullable=False)
-    discord_id = Column(BigInteger, nullable=False)
+    discord_id = Column(BigInteger, ForeignKey("users.discord_id", ondelete="CASCADE"), nullable=False)
     item_key = Column(String(120), nullable=False)
     name = Column(String(120), nullable=False)
     item_type = Column(String(40), nullable=False, server_default="item")
     quantity = Column(Integer, nullable=False, server_default="1")
-    # Исправлено: поле переименовано в extra_data, но маппится на колонку metadata в БД
     extra_data = Column(JSON, name='metadata', nullable=False, server_default=func.text("'{}'::json"))
     expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
