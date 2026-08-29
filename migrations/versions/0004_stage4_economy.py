@@ -21,12 +21,23 @@ def _table_exists(name: str) -> bool:
     return inspect(bind).has_table(name)
 
 
+def _column_exists(table: str, column: str) -> bool:
+    """Check if a column exists in the given table."""
+    bind = op.get_bind()
+    return any(c["name"] == column for c in inspect(bind).get_columns(table))
+
+
 def _index_exists(name: str) -> bool:
     bind = op.get_bind()
-    return any(i["name"] == name for i in inspect(bind).get_indexes(name.split("__", 1)[0])) if "__" in name else False
+    # In case we need to check index existence, keep original logic
+    if "__" in name:
+        table_name = name.split("__", 1)[0]
+        return any(i["name"] == name for i in inspect(bind).get_indexes(table_name))
+    return False
 
 
 def upgrade() -> None:
+    # --- Wallets ---
     if not _table_exists("wallets"):
         op.create_table(
             "wallets",
@@ -46,6 +57,7 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS ix_wallets_guild_id ON wallets (guild_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_wallets_discord_id ON wallets (discord_id)")
 
+    # --- Transactions ---
     if not _table_exists("transactions"):
         op.create_table(
             "transactions",
@@ -61,11 +73,22 @@ def upgrade() -> None:
             sa.Column("reference", sa.String(120), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         )
+    else:
+        # Table already exists – add missing columns if any
+        if not _column_exists("transactions", "from_discord_id"):
+            op.add_column("transactions", sa.Column("from_discord_id", sa.BigInteger(), nullable=True))
+        if not _column_exists("transactions", "to_discord_id"):
+            op.add_column("transactions", sa.Column("to_discord_id", sa.BigInteger(), nullable=True))
+        if not _column_exists("transactions", "actor_discord_id"):
+            op.add_column("transactions", sa.Column("actor_discord_id", sa.BigInteger(), nullable=True))
+
+    # Indexes – columns are guaranteed to exist now
     op.execute("CREATE INDEX IF NOT EXISTS ix_transactions_guild_id ON transactions (guild_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_transactions_from ON transactions (from_discord_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_transactions_to ON transactions (to_discord_id)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_transactions_created_at ON transactions (created_at)")
 
+    # --- Shop Items ---
     if not _table_exists("shop_items"):
         op.create_table(
             "shop_items",
@@ -87,6 +110,7 @@ def upgrade() -> None:
         )
     op.execute("CREATE INDEX IF NOT EXISTS ix_shop_items_guild_id ON shop_items (guild_id)")
 
+    # --- Inventory Items ---
     if not _table_exists("inventory_items"):
         op.create_table(
             "inventory_items",
@@ -106,6 +130,7 @@ def upgrade() -> None:
         )
     op.execute("CREATE INDEX IF NOT EXISTS ix_inventory_items_guild_user ON inventory_items (guild_id, discord_id)")
 
+    # --- Cases ---
     if not _table_exists("cases"):
         op.create_table(
             "cases",
@@ -126,6 +151,7 @@ def upgrade() -> None:
         )
     op.execute("CREATE INDEX IF NOT EXISTS ix_cases_guild_id ON cases (guild_id)")
 
+    # --- Case Rewards ---
     if not _table_exists("case_rewards"):
         op.create_table(
             "case_rewards",
@@ -141,6 +167,7 @@ def upgrade() -> None:
         )
     op.execute("CREATE INDEX IF NOT EXISTS ix_case_rewards_case_id ON case_rewards (case_id)")
 
+    # --- Bank Accounts ---
     if not _table_exists("bank_accounts"):
         op.create_table(
             "bank_accounts",
