@@ -1,206 +1,237 @@
-from __future__ import annotations
-
 import discord
-from discord import app_commands
 from discord.ext import commands
+from discord import app_commands
+from typing import Optional
 
-from bot.services import economy_service as eco
-from bot.services.db import async_session_factory
-from bot.services.log_service import log_audit_action
-from bot.utils.embeds import BRAND_COLOR, error_embed, info_embed, success_embed
-from bot.utils.permissions import require_permission
-
-
-def money(value: int) -> str:
-    return f"${value:,}".replace(",", " ")
-
+from bot.services.economy import EconomyService
+from bot.utils.decorators import check_permissions
 
 class EconomyCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="balance", description="Показать баланс")
-    async def balance(self, interaction: discord.Interaction, member: discord.Member | None = None):
-        target = member or interaction.user
-        async with async_session_factory() as session:
-            value = await eco.get_balance(session, interaction.guild_id, target.id)
-        await interaction.response.send_message(embed=info_embed("💰 Баланс", f"{target.mention}: **{money(value)}**"), ephemeral=target.id != interaction.user.id)
+    @app_commands.command(name="balance", description="Показать баланс (личный или другого участника)")
+    @app_commands.describe(member="Участник, чей баланс показать")
+    async def balance(self, interaction: discord.Interaction, member: discord.Member = None):
+        user_id = member.id if member else interaction.user.id
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
+            wallet = await service.get_or_create_wallet(user_id)
+            bank = await service.get_bank_account()
+            embed = discord.Embed(
+                title=f"💰 Баланс {member.display_name if member else interaction.user.display_name}",
+                color=discord.Color.gold()
+            )
+            embed.add_field(name="Личный баланс", value=f"${wallet.balance:,}", inline=True)
+            embed.add_field(name="Семейный банк", value=f"${bank.balance:,}", inline=True)
+            embed.add_field(name="Всего заработано", value=f"${wallet.lifetime_earned:,}", inline=True)
+            embed.add_field(name="Всего потрачено", value=f"${wallet.lifetime_spent:,}", inline=True)
+            if member:
+                embed.set_footer(text=f"Запросил {interaction.user.display_name}")
+            await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="pay", description="Перевести деньги участнику")
-    async def pay(self, interaction: discord.Interaction, member: discord.Member, amount: int):
-        if member.bot:
-            await interaction.response.send_message("Нельзя переводить деньги ботам.", ephemeral=True); return
-        try:
-            async with async_session_factory() as session:
-                out, _ = await eco.transfer(session, interaction.guild_id, interaction.user.id, member.id, amount)
-        except ValueError as exc:
-            await interaction.response.send_message(embed=error_embed("Перевод не выполнен", str(exc)), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("💸 Перевод выполнен", f"Получатель: {member.mention}\nСумма: **{money(amount)}**\nБаланс: **{money(out.balance_after or 0)}**\nТранзакция: `#{out.id}`"))
-
-    @app_commands.command(name="transfer", description="Алиас команды /pay")
-    async def transfer(self, interaction: discord.Interaction, member: discord.Member, amount: int):
-        await self.pay.callback(self, interaction, member, amount)
+    @app_commands.command(name="pay", description="Перевести деньги другому участнику")
+    @app_commands.describe(recipient="Кому перевести", amount="Сумма", reason="Причина перевода")
+    async def pay(self, interaction: discord.Interaction, recipient: discord.Member,
+                  amount: app_commands.Range[int, 1], reason: str = None):
+        if recipient.id == interaction.user.id:
+            await interaction.response.send_message("❌ Нельзя перевести самому себе.", ephemeral=True)
+            return
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
+            try:
+                tx_from, tx_to = await service.transfer_money(
+                    interaction.user.id, recipient.id, amount,
+                    description=reason, actor_discord_id=interaction.user.id
+                )
+                embed = discord.Embed(
+                    title="✅ Перевод выполнен",
+                    description=f"Вы перевели **${amount:,}** участнику {recipient.mention}",
+                    color=discord.Color.green()
+                )
+                if reason:
+                    embed.add_field(name="Причина", value=reason, inline=False)
+                await interaction.response.send_message(embed=embed)
+            except ValueError as e:
+                await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
 
     @app_commands.command(name="daily", description="Получить ежедневный бонус")
     async def daily(self, interaction: discord.Interaction):
-        await self._bonus(interaction, "daily", eco.DAILY_AMOUNT)
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
+            bonus, claimed = await service.claim_daily(interaction.user.id)
+            if claimed:
+                embed = discord.Embed(
+                    title="🎁 Ежедневный бонус",
+                    description=f"Вы получили **${bonus:,}**!",
+                    color=discord.Color.blue()
+                )
+                await interaction.response.send_message(embed=embed)
+            else:
+                await interaction.response.send_message("❌ Вы уже получали бонус сегодня. Возвращайтесь завтра!", ephemeral=True)
 
-    @app_commands.command(name="weekly", description="Получить недельный бонус")
+    @app_commands.command(name="weekly", description="Получить еженедельный бонус")
     async def weekly(self, interaction: discord.Interaction):
-        await self._bonus(interaction, "weekly", eco.WEEKLY_AMOUNT)
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
+            bonus, claimed = await service.claim_weekly(interaction.user.id)
+            if claimed:
+                embed = discord.Embed(
+                    title="🎁 Еженедельный бонус",
+                    description=f"Вы получили **${bonus:,}**!",
+                    color=discord.Color.purple()
+                )
+                await interaction.response.send_message(embed=embed)
+            else:
+                await interaction.response.send_message("❌ Вы уже получали бонус на этой неделе. Возвращайтесь через неделю!", ephemeral=True)
 
-    async def _bonus(self, interaction: discord.Interaction, kind: str, amount: int):
-        async with async_session_factory() as session:
-            tx = await eco.claim_bonus(session, interaction.guild_id, interaction.user.id, kind, amount)
-        if tx is None:
-            await interaction.response.send_message(embed=error_embed("Бонус уже получен", "Попробуйте снова после окончания периода."), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("🎁 Бонус получен", f"+**{money(amount)}**\nБаланс: **{money(tx.balance_after or 0)}**"))
-
-    @app_commands.command(name="transactions", description="История денежных операций")
-    async def transactions(self, interaction: discord.Interaction, limit: app_commands.Range[int, 1, 25] = 10):
-        async with async_session_factory() as session:
-            rows = await eco.list_transactions(session, interaction.guild_id, interaction.user.id, limit)
-        if not rows:
-            await interaction.response.send_message("История пуста.", ephemeral=True); return
-        lines = []
-        for row in rows:
-            sign = "+" if row.amount > 0 else ""
-            lines.append(f"`#{row.id}` **{sign}{money(row.amount)}** · {row.transaction_type} · {row.description}")
-        await interaction.response.send_message(embed=info_embed("📜 История", "\n".join(lines)), ephemeral=True)
-
-    @app_commands.command(name="shop", description="Открыть магазин семьи")
-    async def shop(self, interaction: discord.Interaction):
-        async with async_session_factory() as session:
-            items = await eco.list_shop(session, interaction.guild_id)
-        if not items:
-            await interaction.response.send_message("Магазин пока пуст.", ephemeral=True); return
-        lines = []
-        for item in items[:25]:
-            stock = "∞" if item.stock is None else str(item.stock)
-            lines.append(f"`{item.item_key}` **{item.name}** — {money(item.price)} · {stock}\n{item.description}")
-        await interaction.response.send_message(embed=discord.Embed(title="🛒 Магазин", description="\n\n".join(lines), color=BRAND_COLOR), ephemeral=True)
-
-    @app_commands.command(name="buy", description="Купить товар")
-    async def buy(self, interaction: discord.Interaction, item_key: str):
-        try:
-            async with async_session_factory() as session:
-                item = await eco.buy_shop_item(session, interaction.guild_id, interaction.user.id, item_key.strip().lower())
-                balance = await eco.get_balance(session, interaction.guild_id, interaction.user.id)
-        except ValueError as exc:
-            await interaction.response.send_message(embed=error_embed("Покупка не выполнена", str(exc)), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("🛒 Покупка", f"**{item.name}**\nСписано: {money(item.price)}\nБаланс: {money(balance)}"))
-
-    @app_commands.command(name="inventory", description="Показать инвентарь")
-    async def inventory(self, interaction: discord.Interaction, member: discord.Member | None = None):
-        target = member or interaction.user
-        async with async_session_factory() as session:
-            items = await eco.list_inventory(session, interaction.guild_id, target.id)
-        desc = "Инвентарь пуст." if not items else "\n".join(f"• **{i.name}** × {i.quantity} · `{i.item_key}`" for i in items)
-        await interaction.response.send_message(embed=info_embed(f"🎒 Инвентарь — {target.display_name}", desc), ephemeral=target.id != interaction.user.id)
-
-    @app_commands.command(name="bank", description="Показать семейный банк")
-    async def bank(self, interaction: discord.Interaction):
-        async with async_session_factory() as session:
-            bank = await eco.get_bank(session, interaction.guild_id)
-        await interaction.response.send_message(embed=info_embed("🏦 Семейный банк", f"Баланс: **{money(bank.balance)}**"), ephemeral=True)
-
-    @app_commands.command(name="bank_deposit", description="Внести деньги в семейный банк")
-    async def bank_deposit(self, interaction: discord.Interaction, amount: int):
-        try:
-            async with async_session_factory() as session:
-                bank, balance = await eco.bank_deposit(session, interaction.guild_id, interaction.user.id, amount)
-        except ValueError as exc:
-            await interaction.response.send_message(embed=error_embed("Операция не выполнена", str(exc)), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("🏦 Пополнение банка", f"Внесено: {money(amount)}\nБанк: {money(bank)}\nВаш баланс: {money(balance)}"))
-
-    @app_commands.command(name="bank_withdraw", description="Снять деньги из семейного банка")
-    @require_permission("manage_economy")
-    async def bank_withdraw(self, interaction: discord.Interaction, amount: int):
-        try:
-            async with async_session_factory() as session:
-                bank, balance = await eco.bank_withdraw(session, interaction.guild_id, interaction.user.id, amount)
-        except ValueError as exc:
-            await interaction.response.send_message(embed=error_embed("Операция не выполнена", str(exc)), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("🏦 Снятие из банка", f"Снято: {money(amount)}\nБанк: {money(bank)}\nВаш баланс: {money(balance)}"))
-
-    economy_group = app_commands.Group(name="economy", description="Администрирование экономики")
-
-    @economy_group.command(name="give", description="Выдать валюту")
-    @require_permission("manage_economy")
-    async def economy_give(self, interaction: discord.Interaction, member: discord.Member, amount: int, reason: str = "Административная награда"):
-        try:
-            async with async_session_factory() as session:
-                tx = await eco.credit(session, interaction.guild_id, member.id, amount, transaction_type="admin_give", actor_discord_id=interaction.user.id, description=reason)
-                await log_audit_action(session, interaction.guild_id, interaction.user.id, "economy.give", str(member.id), {"amount": amount, "reason": reason})
-        except ValueError as exc:
-            await interaction.response.send_message(embed=error_embed("Не выполнено", str(exc)), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("💰 Валюта выдана", f"{member.mention}: +{money(amount)}\nБаланс: {money(tx.balance_after or 0)}"), ephemeral=True)
-
-    @economy_group.command(name="take", description="Списать валюту")
-    @require_permission("manage_economy")
-    async def economy_take(self, interaction: discord.Interaction, member: discord.Member, amount: int, reason: str = "Административный штраф"):
-        try:
-            async with async_session_factory() as session:
-                tx = await eco.debit(session, interaction.guild_id, member.id, amount, transaction_type="admin_take", actor_discord_id=interaction.user.id, description=reason)
-                await log_audit_action(session, interaction.guild_id, interaction.user.id, "economy.take", str(member.id), {"amount": amount, "reason": reason})
-        except ValueError as exc:
-            await interaction.response.send_message(embed=error_embed("Не выполнено", str(exc)), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("💰 Валюта списана", f"{member.mention}: -{money(amount)}\nБаланс: {money(tx.balance_after or 0)}"), ephemeral=True)
-
-    @economy_group.command(name="shop_add", description="Добавить товар")
-    @require_permission("manage_economy")
-    async def shop_add(self, interaction: discord.Interaction, item_key: str, name: str, price: int, item_type: str = "item", description: str = "", stock: int | None = None):
-        try:
-            async with async_session_factory() as session:
-                item = await eco.create_shop_item(session, interaction.guild_id, item_key=item_key.lower().strip(), name=name, price=price, item_type=item_type, description=description, stock=stock, created_by=interaction.user.id)
-                await log_audit_action(session, interaction.guild_id, interaction.user.id, "economy.shop_add", str(item.id))
-        except Exception as exc:
-            await interaction.response.send_message(embed=error_embed("Не удалось добавить товар", str(exc)), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("Товар добавлен", f"`{item.item_key}` · {item.name} · {money(item.price)}"), ephemeral=True)
-
-    @economy_group.command(name="case_add", description="Создать кейс")
-    @require_permission("manage_economy")
-    async def case_add(self, interaction: discord.Interaction, key: str, name: str, price: int, description: str = "", stock: int | None = None):
-        try:
-            async with async_session_factory() as session:
-                case = await eco.create_case(session, interaction.guild_id, key.lower().strip(), name, price, description, stock, interaction.user.id)
-                await log_audit_action(session, interaction.guild_id, interaction.user.id, "economy.case_add", str(case.id))
-        except Exception as exc:
-            await interaction.response.send_message(embed=error_embed("Не удалось создать кейс", str(exc)), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("Кейс создан", f"`{case.key}` · {case.name} · {money(case.price)}"), ephemeral=True)
-
-    @app_commands.command(name="cases", description="Список кейсов")
-    async def cases(self, interaction: discord.Interaction):
-        async with async_session_factory() as session:
-            cases = await eco.list_cases(session, interaction.guild_id)
-        if not cases:
-            await interaction.response.send_message("Кейсов пока нет.", ephemeral=True); return
-        await interaction.response.send_message(embed=info_embed("🎁 Кейсы", "\n".join(f"`{c.key}` **{c.name}** — {money(c.price)}" for c in cases[:25])), ephemeral=True)
-
-    @app_commands.command(name="case", description="Открыть кейс")
-    async def case_open(self, interaction: discord.Interaction, key: str):
-        try:
-            async with async_session_factory() as session:
-                case, reward, balance = await eco.open_case(session, interaction.guild_id, interaction.user.id, key.lower().strip())
-        except ValueError as exc:
-            await interaction.response.send_message(embed=error_embed("Кейс не открыт", str(exc)), ephemeral=True); return
-        reward_text = f"**{reward.rarity}** · {reward.reward_type} · {reward.reward_value}"
-        if reward.reward_type == "money": reward_text += f" (+{money(reward.amount or int(reward.reward_value))})"
-        await interaction.response.send_message(embed=success_embed("🎁 Кейс открыт", f"Кейс: **{case.name}**\nВыпало: {reward_text}\nБаланс: {money(balance)}"))
-
-    @economy_group.command(name="case_reward_add", description="Добавить награду кейсу")
-    @require_permission("manage_economy")
-    async def case_reward_add(self, interaction: discord.Interaction, key: str, reward_type: str, reward_value: str, weight: int, amount: int = 0, rarity: str = "Common"):
-        async with async_session_factory() as session:
-            case = (await session.execute(__import__("sqlalchemy").select(__import__("bot.models.economy", fromlist=["Case"]).Case).where(__import__("bot.models.economy", fromlist=["Case"]).Case.guild_id == interaction.guild_id, __import__("bot.models.economy", fromlist=["Case"]).Case.key == key.lower().strip()))).scalar_one_or_none()
-            if case is None:
-                await interaction.response.send_message("Кейс не найден.", ephemeral=True); return
+    @app_commands.command(name="bank", description="Управление семейным банком (депозит/вывод)")
+    @app_commands.describe(action="deposit или withdraw", amount="Сумма")
+    async def bank(self, interaction: discord.Interaction, action: str, amount: app_commands.Range[int, 1]):
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
             try:
-                reward = await eco.add_case_reward(session, case.id, reward_type, reward_value, weight, amount, rarity)
-            except ValueError as exc:
-                await interaction.response.send_message(str(exc), ephemeral=True); return
-        await interaction.response.send_message(embed=success_embed("Награда кейса добавлена", f"{case.name}: {reward.rarity} · вес {reward.weight}"), ephemeral=True)
+                if action.lower() == "deposit":
+                    tx = await service.deposit_to_bank(interaction.user.id, amount)
+                    embed = discord.Embed(
+                        title="🏦 Депозит в банк",
+                        description=f"Вы положили **${amount:,}** в семейный банк.",
+                        color=discord.Color.green()
+                    )
+                elif action.lower() == "withdraw":
+                    tx = await service.withdraw_from_bank(interaction.user.id, amount)
+                    embed = discord.Embed(
+                        title="🏦 Вывод из банка",
+                        description=f"Вы сняли **${amount:,}** из семейного банка.",
+                        color=discord.Color.green()
+                    )
+                else:
+                    await interaction.response.send_message("❌ Действие должно быть `deposit` или `withdraw`.", ephemeral=True)
+                    return
+                wallet = await service.get_or_create_wallet(interaction.user.id)
+                bank = await service.get_bank_account()
+                embed.add_field(name="Личный баланс", value=f"${wallet.balance:,}", inline=True)
+                embed.add_field(name="Банк", value=f"${bank.balance:,}", inline=True)
+                await interaction.response.send_message(embed=embed)
+            except ValueError as e:
+                await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
 
+    @app_commands.command(name="shop", description="Просмотр магазина")
+    @app_commands.describe(item_type="Категория (title, role, item, ticket, booster)")
+    async def shop(self, interaction: discord.Interaction, item_type: str = None):
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
+            items = await service.get_shop_items(item_type)
+            if not items:
+                await interaction.response.send_message("🛒 В магазине пока нет товаров.", ephemeral=True)
+                return
+            embed = discord.Embed(
+                title="🛒 Магазин",
+                description=f"Категория: {item_type or 'Все'}",
+                color=discord.Color.blue()
+            )
+            for item in items[:10]:
+                stock_str = "∞" if item.stock is None else str(item.stock)
+                embed.add_field(
+                    name=f"{item.name} (${item.price:,})",
+                    value=f"`{item.item_key}` — {item.description or 'Нет описания'}\nВ наличии: {stock_str}",
+                    inline=False
+                )
+            if len(items) > 10:
+                embed.set_footer(text="Показаны первые 10. Используйте /buy <item_key> для покупки.")
+            await interaction.response.send_message(embed=embed)
 
-async def setup(bot: commands.Bot):
+    @app_commands.command(name="buy", description="Купить товар из магазина")
+    @app_commands.describe(item_key="Ключ товара (из /shop)", quantity="Количество (по умолчанию 1)")
+    async def buy(self, interaction: discord.Interaction, item_key: str, quantity: int = 1):
+        if quantity <= 0:
+            await interaction.response.send_message("❌ Количество должно быть положительным.", ephemeral=True)
+            return
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
+            try:
+                inv = await service.purchase_item(interaction.user.id, item_key, quantity)
+                embed = discord.Embed(
+                    title="✅ Покупка успешна",
+                    description=f"Вы купили **{inv.name}** в количестве {quantity}.",
+                    color=discord.Color.green()
+                )
+                await interaction.response.send_message(embed=embed)
+            except ValueError as e:
+                await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
+
+    @app_commands.command(name="inventory", description="Показать ваш инвентарь")
+    async def inventory(self, interaction: discord.Interaction):
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
+            inv_items = await service.get_inventory(interaction.user.id)
+            if not inv_items:
+                await interaction.response.send_message("📭 Ваш инвентарь пуст.", ephemeral=True)
+                return
+            embed = discord.Embed(
+                title="📦 Ваш инвентарь",
+                color=discord.Color.gold()
+            )
+            for inv in inv_items[:10]:
+                expires = f" (до {inv.expires_at.strftime('%d.%m.%Y')})" if inv.expires_at else ""
+                embed.add_field(
+                    name=f"{inv.name} x{inv.quantity}",
+                    value=f"Тип: {inv.item_type}{expires}",
+                    inline=False
+                )
+            if len(inv_items) > 10:
+                embed.set_footer(text="Показаны первые 10 предметов.")
+            await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="cases", description="Список доступных кейсов")
+    async def cases(self, interaction: discord.Interaction):
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
+            cases = await service.get_cases()
+            if not cases:
+                await interaction.response.send_message("📭 Кейсов пока нет.", ephemeral=True)
+                return
+            embed = discord.Embed(
+                title="🎁 Кейсы",
+                description="Откройте кейс и получите награду!",
+                color=discord.Color.magenta()
+            )
+            for case in cases:
+                stock = "∞" if case.stock is None else str(case.stock)
+                expires = f" (до {case.expires_at.strftime('%d.%m.%Y')})" if case.expires_at else ""
+                embed.add_field(
+                    name=f"{case.name}",
+                    value=f"Цена: ${case.price:,}\n{case.description or ''}\nОсталось: {stock}{expires}\nКлюч: `{case.key}`",
+                    inline=False
+                )
+            await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="open_case", description="Открыть кейс")
+    @app_commands.describe(case_key="Ключ кейса из /cases")
+    async def open_case(self, interaction: discord.Interaction, case_key: str):
+        async with self.bot.db_session() as session:
+            service = EconomyService(session, interaction.guild.id)
+            try:
+                result = await service.open_case(interaction.user.id, case_key)
+                embed = discord.Embed(
+                    title="🎉 Вы открыли кейс!",
+                    color=discord.Color.gold()
+                )
+                if result["type"] == "money":
+                    embed.description = f"Вы получили **${result['amount']:,}**!"
+                elif result["type"] == "xp":
+                    embed.description = f"Вы получили **{result['amount']} XP**!"
+                elif result["type"] == "item":
+                    embed.description = f"Вы получили предмет (ключ: {result['item_key']})!"
+                elif result["type"] == "title":
+                    embed.description = f"Вы получили титул **{result['title']}**!"
+                elif result["type"] == "role":
+                    embed.description = f"Вам выдана роль (ID: {result['role_id']})!"
+                else:
+                    embed.description = "Вы получили что-то необычное!"
+                await interaction.response.send_message(embed=embed)
+            except ValueError as e:
+                await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
+
+async def setup(bot):
     await bot.add_cog(EconomyCog(bot))
