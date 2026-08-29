@@ -4,17 +4,20 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# Пример импорта вашего движка/сессии БД (укажите ваш реальный путь)
-# from bot.database import async_session_factory 
+# 1. Импортируем фабрику сессий базы данных
+from bot.database import async_session_factory
 
 load_dotenv()
 
+# Вывод в sys.stdout убирает плашку [err] в консоли хостинга
 logging.basicConfig(
+    stream=sys.stdout,
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
@@ -38,6 +41,7 @@ INITIAL_EXTENSIONS = [
     "bot.cogs.economy_admin",
 ]
 
+
 class FamilyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -45,8 +49,9 @@ class FamilyBot(commands.Bot):
         intents.message_content = False
 
         super().__init__(command_prefix="!", intents=intents)
-        # Привязка сессии БД к боту (подставьте вашу фабрику сессий)
-        # self.db_session = async_session_factory
+        
+        # 2. Привязываем фабрику сессий к боту
+        self.db_session = async_session_factory
 
     async def setup_hook(self):
         # 1. Загружаем все модули
@@ -103,6 +108,7 @@ async def main():
 
         for task in pending:
             task.cancel()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
