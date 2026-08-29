@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, BigInteger, String, DateTime, JSON, Boolean, ForeignKey,
-    CheckConstraint, UniqueConstraint, func
+    CheckConstraint, UniqueConstraint, func, and_
 )
 from sqlalchemy.orm import relationship
 from bot.models.base import Base
@@ -76,7 +76,12 @@ class ShopItem(Base):
         CheckConstraint("price >= 0", name="ck_shop_price_nonnegative"),
         CheckConstraint("stock IS NULL OR stock >= 0", name="ck_shop_stock_nonnegative"),
     )
-    inventory_items = relationship("InventoryItem", back_populates="shop_item")
+    inventory_items = relationship(
+        "InventoryItem",
+        primaryjoin="and_(ShopItem.guild_id == InventoryItem.guild_id, ShopItem.item_key == InventoryItem.item_key)",
+        foreign_keys="[InventoryItem.guild_id, InventoryItem.item_key]",
+        back_populates="shop_item"
+    )
 
 class InventoryItem(Base):
     __tablename__ = "inventory_items"
@@ -99,8 +104,9 @@ class InventoryItem(Base):
     user = relationship("User", foreign_keys=[discord_id], back_populates="inventory_items")
     shop_item = relationship(
         "ShopItem",
-        foreign_keys=[item_key],
-        primaryjoin="and_(InventoryItem.guild_id==ShopItem.guild_id, InventoryItem.item_key==ShopItem.item_key)"
+        primaryjoin="and_(InventoryItem.guild_id == ShopItem.guild_id, InventoryItem.item_key == ShopItem.item_key)",
+        foreign_keys="[InventoryItem.guild_id, InventoryItem.item_key]",
+        back_populates="inventory_items"
     )
 
 class Case(Base):
