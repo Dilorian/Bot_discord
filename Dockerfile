@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["sh", "-c", "alembic upgrade head && python -m bot.main"]
+CMD ["sh", "-c", "echo 'Starting Family Bot...'; alembic upgrade head && exec python -m bot.main"]
