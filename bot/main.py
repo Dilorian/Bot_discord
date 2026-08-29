@@ -27,17 +27,18 @@ INITIAL_EXTENSIONS = [
     "bot.cogs.profile",
     "bot.cogs.activity",
     "bot.cogs.activity_admin",
-    "bot.cogs.activity_plus",
-    "bot.cogs.economy",
+    "bot.cogs.quests",
+    "bot.cogs.achievements",
+    "bot.cogs.ratings",
+    "bot.cogs.season",
 ]
 
 
 class FamilyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.members = True
-        intents.message_content = True  # XP, message logs и задания по сообщениям
-        intents.presences = True
+        intents.members = True  # нужно для on_member_join/remove и профилей
+        intents.message_content = False  # включим на Этапе про XP за сообщения
 
         super().__init__(command_prefix="!", intents=intents)
 

@@ -7,6 +7,7 @@ from discord.ext import commands
 from bot.services.db import async_session_factory
 from bot.services.log_service import log_audit_action
 from bot.services.profile_service import get_or_create_profile
+from bot.services.progress_service import handle_metric_event
 from bot.services.reputation_service import change_reputation
 from bot.services.settings_service import get_or_create_settings, update_settings
 from bot.services.user_service import get_or_create_user
@@ -49,6 +50,9 @@ class ActivityAdminCog(commands.Cog):
         if leveled_up:
             msg += f"\n⬆️ Новый уровень: **{new_level}**"
         await interaction.response.send_message(embed=success_embed("XP изменено", msg), ephemeral=True)
+
+        if amount > 0:
+            await handle_metric_event(self.bot, interaction.guild, member, {"xp": amount})
 
     @xp_group.command(name="settings_view", description="Показать текущие настройки XP")
     async def xp_settings_view(self, interaction: discord.Interaction):
@@ -175,6 +179,11 @@ class ActivityAdminCog(commands.Cog):
             ),
             ephemeral=True,
         )
+
+        if change > 0:
+            await handle_metric_event(
+                self.bot, interaction.guild, member, {}, achievement_metrics=("reputation",)
+            )
 
     # -------------------------------------------------------------- /level
     level_group = app_commands.Group(name="level", description="Настройка наград за уровни")

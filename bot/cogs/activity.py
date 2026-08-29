@@ -11,10 +11,10 @@ from discord.ext import commands, tasks
 from bot.services.db import async_session_factory
 from bot.services.log_service import send_log_embed
 from bot.services.profile_service import get_or_create_profile, register_activity
+from bot.services.progress_service import handle_metric_event
 from bot.services.settings_service import get_or_create_settings
 from bot.services.user_service import get_or_create_user
 from bot.services.xp_service import add_xp, get_daily_message_xp, get_level_reward_role
-from bot.services.activity_service import update_quest_progress, unlock_achievements, add_family_pass_xp
 
 logger = logging.getLogger("bot.activity")
 
@@ -93,12 +93,13 @@ class ActivityCog(commands.Cog):
                 session, profile, message.author.id, amount, reason="message"
             )
             await register_activity(session, profile)
-            await update_quest_progress(session, guild_id, message.author.id, "message", 1)
-            await add_family_pass_xp(session, guild_id, user.id, amount)
-            await unlock_achievements(session, guild_id, user.id, profile, {"messages": profile.message_count, "xp": profile.total_xp, "voice_minutes": profile.voice_seconds // 60, "streak": profile.activity_streak})
 
         if leveled_up:
             await self._handle_level_up(message.guild, message.author, new_level, settings)
+
+        await handle_metric_event(
+            self.bot, message.guild, message.author, {"messages": 1, "xp": amount}
+        )
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -141,12 +142,16 @@ class ActivityCog(commands.Cog):
                     session, profile, member.id, xp_amount, reason="voice"
                 )
             await register_activity(session, profile)
-            await update_quest_progress(session, member.guild.id, member.id, "voice_minute", duration_seconds // 60)
-            await add_family_pass_xp(session, member.guild.id, user.id, xp_amount)
-            await unlock_achievements(session, member.guild.id, user.id, profile, {"messages": profile.message_count, "xp": profile.total_xp, "voice_minutes": profile.voice_seconds // 60, "streak": profile.activity_streak})
 
         if leveled_up:
             await self._handle_level_up(member.guild, member, new_level, settings)
+
+        await handle_metric_event(
+            self.bot,
+            member.guild,
+            member,
+            {"voice_minutes": duration_seconds // 60, "xp": xp_amount},
+        )
 
     @tasks.loop(minutes=5.0)
     async def voice_xp_task(self):

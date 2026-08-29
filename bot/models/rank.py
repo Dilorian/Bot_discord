@@ -71,14 +71,9 @@ KNOWN_PERMISSIONS: list[str] = [
     "manage_permissions",
     "view_audit_logs",
     "manage_xp",  # Этап 2: ручная выдача/списание XP, настройка XP
-    "manage_reputation",
-    "manage_quests",
-    "manage_achievements",
-    "manage_seasons",
-    "manage_pass",
-    "manage_economy",
-    "manage_cases",
-    "manage_bank",
-    "view_bank",
+    "manage_reputation",  # Этап 2: изменение репутации
+    "manage_quests",  # Этап 3: создание/редактирование заданий
+    "manage_achievements",  # Этап 3: создание/редактирование достижений
+    "manage_seasons",  # Этап 3: сезоны и награды Family Pass
     "administrator",  # полный доступ, аналог владельца
 ]

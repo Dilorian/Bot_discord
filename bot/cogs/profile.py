@@ -5,7 +5,9 @@ from discord import app_commands
 from discord.ext import commands
 from sqlalchemy import select
 
+from bot.models.achievement import RARITY_EMOJI
 from bot.models.xp import XPHistory
+from bot.services import achievement_service, quest_service
 from bot.services.db import async_session_factory
 from bot.services.profile_service import days_in_family, get_or_create_profile
 from bot.services.user_service import get_or_create_user
@@ -15,8 +17,6 @@ from bot.utils.embeds import BRAND_COLOR, info_embed
 # Разделы, которые появятся на будущих этапах — сейчас только заглушка,
 # чтобы кнопки из раздела 3 ТЗ уже присутствовали в интерфейсе.
 _COMING_SOON = {
-    "achievements": "Достижения появятся на Этапе 3 (система заданий и достижений).",
-    "quests": "Задания появятся на Этапе 3.",
     "inventory": "Инвентарь появится на Этапе 4 (экономика и магазин).",
 }
 
@@ -70,7 +70,17 @@ async def _build_profile_embed(guild: discord.Guild, member: discord.Member) -> 
 
     embed.add_field(name="Voice-время", value=_format_duration(profile.voice_seconds), inline=True)
     embed.add_field(name="Сообщений отправлено", value=str(profile.message_count), inline=True)
-    embed.add_field(name="Мероприятий / заданий / достижений", value="— (следующие этапы)", inline=True)
+
+    async with async_session_factory() as session:
+        user_quests = await quest_service.list_user_quests(session, guild.id, member.id)
+        completed_quests = sum(1 for _, p in user_quests if p and p.is_completed)
+        achievements_count = len(await achievement_service.list_unlocked(session, guild.id, member.id))
+
+    embed.add_field(
+        name="Заданий / достижений",
+        value=f"{completed_quests} / {achievements_count} (мероприятия — Этап 5)",
+        inline=True,
+    )
 
     return embed
 
@@ -86,7 +96,24 @@ class ProfileView(discord.ui.View):
 
     @discord.ui.button(label="Достижения", emoji="🏆", style=discord.ButtonStyle.secondary, row=0)
     async def achievements(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._placeholder(interaction, "achievements")
+        async with async_session_factory() as session:
+            all_achievements = await achievement_service.list_achievements(session, self.guild.id)
+            unlocked = await achievement_service.list_unlocked(session, self.guild.id, self.member.id)
+            unlocked_ids = {u.achievement_id for u in unlocked}
+
+        lines = [
+            f"{RARITY_EMOJI.get(a.rarity, '')} **{a.name}** — {a.description}"
+            for a in all_achievements
+            if a.id in unlocked_ids
+        ]
+        locked_count = sum(1 for a in all_achievements if a.id not in unlocked_ids and not a.is_secret)
+
+        embed = info_embed(
+            f"🏆 Достижения — {self.member.display_name}",
+            "\n".join(lines) or "Пока нет полученных достижений.",
+        )
+        embed.set_footer(text=f"Получено {len(lines)}/{len(all_achievements)} · ещё не открыто: {locked_count}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="Статистика", emoji="📊", style=discord.ButtonStyle.secondary, row=0)
     async def statistics(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -107,7 +134,24 @@ class ProfileView(discord.ui.View):
 
     @discord.ui.button(label="Задания", emoji="🎯", style=discord.ButtonStyle.secondary, row=1)
     async def quests(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._placeholder(interaction, "quests")
+        async with async_session_factory() as session:
+            rows = await quest_service.list_user_quests(session, self.guild.id, self.member.id)
+
+        if not rows:
+            await interaction.response.send_message("Активных заданий сейчас нет.", ephemeral=True)
+            return
+
+        lines = []
+        for quest, progress in rows:
+            current = progress.progress_amount if progress else 0
+            if progress and progress.is_completed:
+                mark = "✅" if progress.reward_claimed else "🎁 (забрать через /quests)"
+            else:
+                mark = f"{current}/{quest.requirement_amount}"
+            lines.append(f"**{quest.title}** — {mark}")
+
+        embed = info_embed(f"🎯 Задания — {self.member.display_name}", "\n".join(lines))
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="Инвентарь", emoji="💰", style=discord.ButtonStyle.secondary, row=1)
     async def inventory(self, interaction: discord.Interaction, button: discord.ui.Button):
