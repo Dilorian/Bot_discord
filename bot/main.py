@@ -32,6 +32,7 @@ INITIAL_EXTENSIONS = [
     "bot.cogs.ratings",
     "bot.cogs.season",
     "bot.cogs.economy",
+    "bot.cogs.economy_admin",  # Добавлена административная экономика
 ]
 
 
@@ -56,6 +57,10 @@ class FamilyBot(commands.Bot):
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
             logger.info("Slash-команды синхронизированы для гильдии %s (мгновенно)", GUILD_ID)
+        else:
+            # Если GUILD_ID не указан, синхронизируем команды глобально для всех серверов
+            await self.tree.sync()
+            logger.info("Slash-команды синхронизированы глобально")
 
     async def on_error(self, event_method: str, /, *args, **kwargs):
         logger.exception("Необработанное исключение в событии %s", event_method)
