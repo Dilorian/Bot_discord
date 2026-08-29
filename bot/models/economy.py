@@ -9,7 +9,6 @@ class Wallet(Base):
     __tablename__ = "wallets"
     id = Column(Integer, primary_key=True, autoincrement=True)
     guild_id = Column(BigInteger, nullable=False)
-    # Внешний ключ к users.discord_id
     discord_id = Column(BigInteger, ForeignKey("users.discord_id", ondelete="CASCADE"), nullable=False)
     balance = Column(BigInteger, nullable=False, server_default="0")
     lifetime_earned = Column(BigInteger, nullable=False, server_default="0")
@@ -37,8 +36,8 @@ class Transaction(Base):
     description = Column(String(300), nullable=False, server_default="")
     reference = Column(String(120), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-    # Явные отношения без внешних ключей
+    
+    # Явные отношения без внешних ключей (чтобы не создавать циклических зависимостей)
     from_user = relationship(
         "User",
         foreign_keys=[from_discord_id],
@@ -88,7 +87,8 @@ class InventoryItem(Base):
     name = Column(String(120), nullable=False)
     item_type = Column(String(40), nullable=False, server_default="item")
     quantity = Column(Integer, nullable=False, server_default="1")
-    extra_data = Column(JSON, name='metadata', nullable=False, server_default=func.text("'{}'::json"))
+    # Исправлено: поле называется extra_data, но в БД колонка metadata
+    extra_data = Column(JSON, name="metadata", nullable=False, server_default=func.text("'{}'::json"))
     expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -97,7 +97,11 @@ class InventoryItem(Base):
         CheckConstraint("quantity > 0", name="ck_inventory_quantity_positive"),
     )
     user = relationship("User", foreign_keys=[discord_id], back_populates="inventory_items")
-    shop_item = relationship("ShopItem", foreign_keys=[item_key], primaryjoin="and_(InventoryItem.guild_id==ShopItem.guild_id, InventoryItem.item_key==ShopItem.item_key)")
+    shop_item = relationship(
+        "ShopItem",
+        foreign_keys=[item_key],
+        primaryjoin="and_(InventoryItem.guild_id==ShopItem.guild_id, InventoryItem.item_key==ShopItem.item_key)"
+    )
 
 class Case(Base):
     __tablename__ = "cases"
