@@ -28,7 +28,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     guild_id = Column(BigInteger, nullable=False)
-    actor_discord_id = Column(BigInteger, nullable=True)   # можно добавить ForeignKey, но не обязательно
+    actor_discord_id = Column(BigInteger, nullable=True)
     from_discord_id = Column(BigInteger, nullable=True)
     to_discord_id = Column(BigInteger, nullable=True)
     amount = Column(BigInteger, nullable=False)
@@ -37,10 +37,26 @@ class Transaction(Base):
     description = Column(String(300), nullable=False, server_default="")
     reference = Column(String(120), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    # Отношения (без ForeignKey, чтобы не создавать циклических зависимостей)
-    from_user = relationship("User", foreign_keys=[from_discord_id])
-    to_user = relationship("User", foreign_keys=[to_discord_id])
-    actor_user = relationship("User", foreign_keys=[actor_discord_id])
+
+    # Явные отношения без внешних ключей
+    from_user = relationship(
+        "User",
+        foreign_keys=[from_discord_id],
+        primaryjoin="User.discord_id == Transaction.from_discord_id",
+        viewonly=True
+    )
+    to_user = relationship(
+        "User",
+        foreign_keys=[to_discord_id],
+        primaryjoin="User.discord_id == Transaction.to_discord_id",
+        viewonly=True
+    )
+    actor_user = relationship(
+        "User",
+        foreign_keys=[actor_discord_id],
+        primaryjoin="User.discord_id == Transaction.actor_discord_id",
+        viewonly=True
+    )
 
 class ShopItem(Base):
     __tablename__ = "shop_items"
