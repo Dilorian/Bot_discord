@@ -10,8 +10,8 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# 1. Импортируем фабрику сессий базы данных
-from bot.database import async_session_factory
+# 1. Импортируем фабрику сессий базы данных из правильного модуля
+from bot.services.db import async_session_factory
 
 load_dotenv()
 
