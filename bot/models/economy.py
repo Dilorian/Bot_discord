@@ -70,7 +70,8 @@ class InventoryItem(Base):
     name = Column(String(120), nullable=False)
     item_type = Column(String(40), nullable=False, server_default="item")
     quantity = Column(Integer, nullable=False, server_default="1")
-    metadata = Column(JSON, nullable=False, server_default=func.text("'{}'::json"))
+    # Исправлено: поле переименовано в extra_data, но маппится на колонку metadata в БД
+    extra_data = Column(JSON, name='metadata', nullable=False, server_default=func.text("'{}'::json"))
     expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
