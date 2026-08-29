@@ -270,7 +270,7 @@ class EconomyService:
                     name=item.name,
                     item_type=item.item_type,
                     quantity=quantity,
-                    metadata={}
+                    extra_data={}   # исправлено
                 )
                 self.session.add(inv)
             await self.session.flush()
@@ -362,7 +362,7 @@ class EconomyService:
                             name=shop_item.name,
                             item_type=shop_item.item_type,
                             quantity=1,
-                            metadata={}
+                            extra_data={}   # исправлено
                         )
                         self.session.add(inv)
                         result_info["item_key"] = reward_value
@@ -373,7 +373,7 @@ class EconomyService:
             await self.session.flush()
         return result_info
 
-    # Админские методы для магазина и кейсов
+    # Админские методы
     async def create_shop_item(self, name: str, price: int, item_type: str, item_key: str,
                                description: str = "", stock: int = None,
                                created_by: int = None) -> ShopItem:
