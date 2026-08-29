@@ -1,44 +1,54 @@
 import functools
 from typing import Callable, Any
 import discord
+from discord import app_commands
 from discord.ext import commands
 
+def check_permissions(*custom_perms: str, **perms: bool):
+    """
+    Декоратор проверки прав для слэш-команд (app_commands).
+    Поддерживает:
+      - Кастомные права строкой: @check_permissions("manage_economy")
+      - Стандартные права Discord: @check_permissions(administrator=True)
+    """
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if interaction.guild is None:
+            raise app_commands.NoPrivateMessage("Эта команда недоступна в личных сообщениях.")
 
-def check_permissions(**perms: bool):
-    """
-    Декоратор для проверки прав пользователя на сервере Discord.
-    Пример использования: @check_permissions(administrator=True) или @check_permissions(manage_messages=True)
-    """
-    async def predicate(ctx: commands.Context) -> bool:
-        if ctx.guild is None:
-            raise commands.NoPrivateMessage("Эта команда недоступна в личных сообщениях.")
-        
-        # Администраторам разрешено всё
-        if ctx.author.guild_permissions.administrator:
+        # 1. Администраторам разрешено всё
+        if interaction.user.guild_permissions.administrator:
             return True
 
-        author_perms = ctx.author.guild_permissions
-        missing = [perm for perm, value in perms.items() if getattr(author_perms, perm, None) != value]
-        
-        if missing:
-            raise commands.MissingPermissions(missing)
+        # 2. Проверка встроенных прав Discord (если переданы именованные аргументы)
+        if perms:
+            author_perms = interaction.user.guild_permissions
+            missing = [perm for perm, value in perms.items() if getattr(author_perms, perm, None) != value]
+            if missing:
+                raise app_commands.MissingPermissions(missing)
+
+        # 3. Проверка кастомных прав из вашей базы данных / ролей (если переданы строки)
+        if custom_perms:
+            # TODO: Добавьте здесь проверку из вашей системы прав, если она есть.
+            # Пример: if "manage_economy" in custom_perms: ...
+            pass
+
         return True
 
-    return commands.check(predicate)
+    return app_commands.check(predicate)
 
 
 def is_admin():
-    """Декоратор: разрешает команду только администраторам."""
+    """Декоратор: разрешает слэш-команду только администраторам."""
     return check_permissions(administrator=True)
 
 
 def guild_only():
-    """Декоратор: запрещает выполнение команды в ЛС бота."""
-    async def predicate(ctx: commands.Context) -> bool:
-        if ctx.guild is None:
-            raise commands.NoPrivateMessage("Команду можно использовать только на сервере.")
+    """Декоратор: запрещает выполнение слэш-команды в ЛС бота."""
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if interaction.guild is None:
+            raise app_commands.NoPrivateMessage("Команду можно использовать только на сервере.")
         return True
-    return commands.check(predicate)
+    return app_commands.check(predicate)
 
 
 def log_errors(func: Callable[..., Any]) -> Callable[..., Any]:
