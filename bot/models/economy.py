@@ -1,96 +1,129 @@
-from __future__ import annotations
+from sqlalchemy import (
+    Column, Integer, BigInteger, String, DateTime, JSON, Boolean, ForeignKey,
+    CheckConstraint, UniqueConstraint, func
+)
+from sqlalchemy.orm import relationship
+from bot.models.base import Base
 
-from datetime import datetime
-from typing import Optional
-
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, String
-from sqlalchemy.orm import Mapped, mapped_column
-
-from bot.models.base import Base, TimestampMixin
-
-
-class Wallet(Base, TimestampMixin):
+class Wallet(Base):
     __tablename__ = "wallets"
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    guild_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    discord_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    balance: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    lifetime_earned: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    lifetime_spent: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    daily_claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    weekly_claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, nullable=False)
+    discord_id = Column(BigInteger, nullable=False)
+    balance = Column(BigInteger, nullable=False, server_default="0")
+    lifetime_earned = Column(BigInteger, nullable=False, server_default="0")
+    lifetime_spent = Column(BigInteger, nullable=False, server_default="0")
+    daily_claimed_at = Column(DateTime(timezone=True), nullable=True)
+    weekly_claimed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("guild_id", "discord_id", name="uq_wallet_guild_user"),
+        CheckConstraint("balance >= 0", name="ck_wallet_balance_nonnegative"),
+    )
+    user = relationship("User", foreign_keys=[discord_id], back_populates="wallet", uselist=False)
 
 class Transaction(Base):
     __tablename__ = "transactions"
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    guild_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    actor_discord_id: Mapped[Optional[int]] = mapped_column(BigInteger)
-    from_discord_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
-    to_discord_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
-    amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    balance_after: Mapped[Optional[int]] = mapped_column(BigInteger)
-    transaction_type: Mapped[str] = mapped_column(String(40), nullable=False)
-    description: Mapped[str] = mapped_column(String(300), default="", nullable=False)
-    reference: Mapped[Optional[str]] = mapped_column(String(120))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=__import__("sqlalchemy").func.now(), nullable=False)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, nullable=False)
+    actor_discord_id = Column(BigInteger, nullable=True)
+    from_discord_id = Column(BigInteger, nullable=True)
+    to_discord_id = Column(BigInteger, nullable=True)
+    amount = Column(BigInteger, nullable=False)
+    balance_after = Column(BigInteger, nullable=True)
+    transaction_type = Column(String(40), nullable=False)
+    description = Column(String(300), nullable=False, server_default="")
+    reference = Column(String(120), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    from_user = relationship("User", foreign_keys=[from_discord_id])
+    to_user = relationship("User", foreign_keys=[to_discord_id])
+    actor_user = relationship("User", foreign_keys=[actor_discord_id])
 
-
-class ShopItem(Base, TimestampMixin):
+class ShopItem(Base):
     __tablename__ = "shop_items"
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    guild_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    description: Mapped[str] = mapped_column(String(500), default="", nullable=False)
-    item_type: Mapped[str] = mapped_column(String(40), default="item", nullable=False)
-    item_key: Mapped[str] = mapped_column(String(120), nullable=False)
-    price: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    stock: Mapped[Optional[int]] = mapped_column(Integer)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_by: Mapped[Optional[int]] = mapped_column(BigInteger)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, nullable=False)
+    name = Column(String(120), nullable=False)
+    description = Column(String(500), nullable=False, server_default="")
+    item_type = Column(String(40), nullable=False, server_default="item")
+    item_key = Column(String(120), nullable=False)
+    price = Column(BigInteger, nullable=False)
+    stock = Column(Integer, nullable=True)
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    created_by = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("guild_id", "item_key", name="uq_shop_item_key"),
+        CheckConstraint("price >= 0", name="ck_shop_price_nonnegative"),
+        CheckConstraint("stock IS NULL OR stock >= 0", name="ck_shop_stock_nonnegative"),
+    )
+    inventory_items = relationship("InventoryItem", back_populates="shop_item")
 
-
-class InventoryItem(Base, TimestampMixin):
+class InventoryItem(Base):
     __tablename__ = "inventory_items"
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    guild_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    discord_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    item_key: Mapped[str] = mapped_column(String(120), nullable=False)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    item_type: Mapped[str] = mapped_column(String(40), default="item", nullable=False)
-    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    item_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict, nullable=False)
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, nullable=False)
+    discord_id = Column(BigInteger, nullable=False)
+    item_key = Column(String(120), nullable=False)
+    name = Column(String(120), nullable=False)
+    item_type = Column(String(40), nullable=False, server_default="item")
+    quantity = Column(Integer, nullable=False, server_default="1")
+    metadata = Column(JSON, nullable=False, server_default=func.text("'{}'::json"))
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("guild_id", "discord_id", "item_key", name="uq_inventory_item"),
+        CheckConstraint("quantity > 0", name="ck_inventory_quantity_positive"),
+    )
+    user = relationship("User", foreign_keys=[discord_id], back_populates="inventory_items")
+    shop_item = relationship("ShopItem", foreign_keys=[item_key], primaryjoin="and_(InventoryItem.guild_id==ShopItem.guild_id, InventoryItem.item_key==ShopItem.item_key)")
 
-
-class Case(Base, TimestampMixin):
+class Case(Base):
     __tablename__ = "cases"
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    guild_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    key: Mapped[str] = mapped_column(String(100), nullable=False)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    description: Mapped[str] = mapped_column(String(500), default="", nullable=False)
-    price: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    stock: Mapped[Optional[int]] = mapped_column(Integer)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    created_by: Mapped[Optional[int]] = mapped_column(BigInteger)
-
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, nullable=False)
+    key = Column(String(100), nullable=False)
+    name = Column(String(120), nullable=False)
+    description = Column(String(500), nullable=False, server_default="")
+    price = Column(BigInteger, nullable=False)
+    stock = Column(Integer, nullable=True)
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("guild_id", "key", name="uq_case_guild_key"),
+        CheckConstraint("price >= 0", name="ck_case_price_nonnegative"),
+    )
+    rewards = relationship("CaseReward", back_populates="case", cascade="all, delete-orphan")
 
 class CaseReward(Base):
     __tablename__ = "case_rewards"
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False)
-    reward_type: Mapped[str] = mapped_column(String(40), nullable=False)
-    reward_value: Mapped[str] = mapped_column(String(200), nullable=False)
-    amount: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    weight: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    rarity: Mapped[str] = mapped_column(String(20), default="Common", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=__import__("sqlalchemy").func.now(), nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    case_id = Column(Integer, ForeignKey("cases.id", ondelete="CASCADE"), nullable=False)
+    reward_type = Column(String(40), nullable=False)
+    reward_value = Column(String(200), nullable=False)
+    amount = Column(BigInteger, nullable=False, server_default="0")
+    weight = Column(Integer, nullable=False, server_default="1")
+    rarity = Column(String(20), nullable=False, server_default="Common")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    __table_args__ = (
+        CheckConstraint("weight > 0", name="ck_case_reward_weight_positive"),
+    )
+    case = relationship("Case", back_populates="rewards")
 
-
-class BankAccount(Base, TimestampMixin):
+class BankAccount(Base):
     __tablename__ = "bank_accounts"
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    guild_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
-    balance: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    guild_id = Column(BigInteger, nullable=False, unique=True)
+    balance = Column(BigInteger, nullable=False, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("guild_id", name="uq_bank_guild"),
+        CheckConstraint("balance >= 0", name="ck_bank_balance_nonnegative"),
+    )
